@@ -1,0 +1,23 @@
+name: ark_breeding_tracker
+description: ARK Ascended Breeding Tracker - Zucht-Timer mit Push-Benachrichtigungen.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2
+  shared_preferences: ^2.3.0
+  flutter_local_notifications: ^19.0.0
+  timezone: ^0.10.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
