@@ -1,0 +1,92 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:   # manueller Start per Knopf
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Android-Projekt erzeugen (eigene Dateien bleiben erhalten)
+        run: |
+          cp lib/main.dart /tmp/main.dart
+          cp pubspec.yaml /tmp/pubspec.yaml
+          flutter create --platforms=android --project-name ark_breeding_tracker --org com.example.arktracker .
+          cp /tmp/main.dart lib/main.dart
+          cp /tmp/pubspec.yaml pubspec.yaml
+
+      - name: Gradle und Manifest für Benachrichtigungen anpassen
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+
+          # --- Gradle: Core Library Desugaring ---
+          app = pathlib.Path('android/app')
+          kts = app / 'build.gradle.kts'
+          if kts.exists():
+              f = kts
+              t = f.read_text()
+              t = re.sub(r'(compileOptions\s*\{)',
+                         r'\1\n        isCoreLibraryDesugaringEnabled = true', t, count=1)
+              t += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+          else:
+              f = app / 'build.gradle'
+              t = f.read_text()
+              t = re.sub(r'(compileOptions\s*\{)',
+                         r'\1\n        coreLibraryDesugaringEnabled true', t, count=1)
+              t += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
+          f.write_text(t)
+
+          # --- Manifest: Rechte und Receiver ---
+          m = pathlib.Path('android/app/src/main/AndroidManifest.xml')
+          x = m.read_text()
+          perms = (
+              '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
+              '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n'
+              '    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>\n'
+              '    <uses-permission android:name="android.permission.VIBRATE"/>\n'
+              '    '
+          )
+          receivers = (
+              '<receiver android:exported="false" '
+              'android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"/>\n'
+              '        <receiver android:exported="false" '
+              'android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n'
+              '            <intent-filter>\n'
+              '                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n'
+              '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n'
+              '            </intent-filter>\n'
+              '        </receiver>\n'
+              '    '
+          )
+          x = x.replace('<application', perms + '<application', 1)
+          x = x.replace('</application>', receivers + '</application>', 1)
+          m.write_text(x)
+          PY
+
+      - name: Abhängigkeiten laden
+        run: flutter pub get
+
+      - name: APK bauen
+        run: flutter build apk --release
+
+      - name: APK hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: ark-breeding-tracker-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
