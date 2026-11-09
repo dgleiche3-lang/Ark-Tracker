@@ -1,59 +1,92 @@
-import 'package:flutter/material.dart';
+name: Build Android APK
 
-import 'models.dart';
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
 
-class SpeciesDropdown extends StatelessWidget {
-  final String value;
-  final ValueChanged<String> onChanged;
-  const SpeciesDropdown(
-      {super.key, required this.value, required this.onChanged});
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-  @override
-  Widget build(BuildContext context) {
-    return DropdownButtonFormField<String>(
-      initialValue: value,
-      decoration: const InputDecoration(labelText: 'Rasse'),
-      dropdownColor: kSurface,
-      items: kSpecies
-          .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-          .toList(),
-      onChanged: (v) => onChanged(v ?? value),
-    );
-  }
-}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-class TypeSelector extends StatelessWidget {
-  final TimerType value;
-  final ValueChanged<TimerType> onChanged;
-  const TypeSelector({super.key, required this.value, required this.onChanged});
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('Typ', style: TextStyle(color: Colors.white70)),
-        const SizedBox(height: 8),
-        SizedBox(
-          width: double.infinity,
-          child: SegmentedButton<TimerType>(
-            segments: const [
-              ButtonSegment(
-                value: TimerType.egg,
-                icon: Icon(Icons.egg_outlined),
-                label: Text('Ei-Inkubation'),
-              ),
-              ButtonSegment(
-                value: TimerType.baby,
-                icon: Icon(Icons.child_care),
-                label: Text('Baby-Imprint'),
-              ),
-            ],
-            selected: {value},
-            onSelectionChanged: (s) => onChanged(s.first),
-          ),
-        ),
-      ],
-    );
-  }
-}
+      - name: Android-Projekt erzeugen (eigene Dateien bleiben erhalten)
+        run: |
+          cp lib/main.dart /tmp/main.dart
+          cp pubspec.yaml /tmp/pubspec.yaml
+          flutter create --platforms=android --project-name ark_breeding_tracker --org com.example.arktracker .
+          cp /tmp/main.dart lib/main.dart
+          cp /tmp/pubspec.yaml pubspec.yaml
+
+      - name: Gradle und Manifest für Benachrichtigungen anpassen
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+
+          # --- Gradle: Core Library Desugaring ---
+          app = pathlib.Path('android/app')
+          kts = app / 'build.gradle.kts'
+          if kts.exists():
+              f = kts
+              t = f.read_text()
+              t = re.sub(r'(compileOptions\s*\{)',
+                         r'\1\n        isCoreLibraryDesugaringEnabled = true', t, count=1)
+              t += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+          else:
+              f = app / 'build.gradle'
+              t = f.read_text()
+              t = re.sub(r'(compileOptions\s*\{)',
+                         r'\1\n        coreLibraryDesugaringEnabled true', t, count=1)
+              t += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
+          f.write_text(t)
+
+          # --- Manifest: Rechte und Receiver ---
+          m = pathlib.Path('android/app/src/main/AndroidManifest.xml')
+          x = m.read_text()
+          perms = (
+              '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
+              '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n'
+              '    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>\n'
+              '    <uses-permission android:name="android.permission.VIBRATE"/>\n'
+              '    '
+          )
+          receivers = (
+              '<receiver android:exported="false" '
+              'android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"/>\n'
+              '        <receiver android:exported="false" '
+              'android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n'
+              '            <intent-filter>\n'
+              '                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n'
+              '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n'
+              '            </intent-filter>\n'
+              '        </receiver>\n'
+              '    '
+          )
+          x = x.replace('<application', perms + '<application', 1)
+          x = x.replace('</application>', receivers + '</application>', 1)
+          m.write_text(x)
+          PY
+
+      - name: Abhängigkeiten laden
+        run: flutter pub get
+
+      - name: APK bauen
+        run: flutter build apk --release
+
+      - name: APK hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: ark-breeding-tracker-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
